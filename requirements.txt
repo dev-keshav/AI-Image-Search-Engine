@@ -1,0 +1,9 @@
+streamlit
+torch
+torchvision
+open_clip_torch
+faiss-cpu
+pillow
+numpy
+tqdm
+opencv-python
