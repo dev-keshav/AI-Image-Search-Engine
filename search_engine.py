@@ -12,13 +12,10 @@ import open_clip
 class ImageSearchEngine:
     def __init__(self, model_name="ViT-B-32", pretrained="laion2b_s34b_b79k"):
         """
-        Initialize the image search engine.
-        This loads the OpenCLIP model, tokenizer, and preprocessing pipeline.
+        Initialize model, tokenizer, and preprocessing pipeline.
         """
-
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
 
-        # Load model, transforms, and tokenizer
         self.model, _, self.preprocess = open_clip.create_model_and_transforms(
             model_name,
             pretrained=pretrained
@@ -34,7 +31,7 @@ class ImageSearchEngine:
 
     def is_image_file(self, filename):
         """
-        Check whether a file is an image based on extension.
+        Check whether a file is a valid image.
         """
         valid_extensions = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
         ext = os.path.splitext(filename)[1].lower()
@@ -42,7 +39,7 @@ class ImageSearchEngine:
 
     def get_all_image_paths(self, folder_path):
         """
-        Recursively collect all valid image paths from a folder.
+        Recursively collect all image paths from a folder.
         """
         image_paths = []
         for root, _, files in os.walk(folder_path):
@@ -66,7 +63,7 @@ class ImageSearchEngine:
 
     def encode_text(self, text):
         """
-        Convert input text prompt into a normalized embedding vector.
+        Convert text prompt into a normalized embedding vector.
         """
         text_tokens = self.tokenizer([text]).to(self.device)
 
@@ -78,65 +75,80 @@ class ImageSearchEngine:
 
     def build_index(self, folder_path):
         """
-        Build a FAISS index from all images in the given folder.
+        Build FAISS index for all images in the folder.
         """
-        self.image_paths = self.get_all_image_paths(folder_path)
+        all_paths = self.get_all_image_paths(folder_path)
 
-        if not self.image_paths:
+        if not all_paths:
             raise ValueError("No valid images found in the folder.")
 
+        valid_paths = []
         embeddings = []
 
-        for path in tqdm(self.image_paths, desc="Indexing images"):
+        for path in tqdm(all_paths, desc="Indexing images"):
             try:
                 embedding = self.encode_image(path)
                 embeddings.append(embedding)
+                valid_paths.append(path)
             except Exception as e:
                 print(f"Skipping {path}: {e}")
 
         if not embeddings:
             raise ValueError("No embeddings could be created.")
 
+        self.image_paths = valid_paths
         embeddings = np.vstack(embeddings)
-
         self.embedding_dim = embeddings.shape[1]
 
-        # Inner product works because embeddings are normalized
+        # Since embeddings are normalized, inner product ~ cosine similarity
         self.index = faiss.IndexFlatIP(self.embedding_dim)
         self.index.add(embeddings)
 
         return len(self.image_paths)
 
-    def search(self, query, top_k=5):
+    def search(self, query, top_k=5, fetch_k=20, min_score=0.18, relative_threshold=0.90):
         """
-        Search top-k most similar images for a text query.
+        Search images by text query using semantic similarity.
+        Filters weak matches using:
+        - minimum absolute score
+        - relative threshold from best score
         """
         if self.index is None:
             raise ValueError("Index not built or loaded.")
 
         query_embedding = self.encode_text(query)
-
-        scores, indices = self.index.search(query_embedding, top_k)
+        scores, indices = self.index.search(query_embedding, fetch_k)
 
         results = []
-        for score, idx in zip(scores[0], indices[0]):
-            if idx < len(self.image_paths):
-                results.append({
-                    "image_path": self.image_paths[idx],
-                    "score": float(score)
-                })
+        top_score = float(scores[0][0]) if len(scores[0]) > 0 else 0.0
 
-        return results
+        for score, idx in zip(scores[0], indices[0]):
+            score = float(score)
+
+            if idx >= len(self.image_paths):
+                continue
+
+            if score < min_score:
+                continue
+
+            if top_score > 0 and score < top_score * relative_threshold:
+                continue
+
+            results.append({
+                "image_path": self.image_paths[idx],
+                "score": score
+            })
+
+        return results[:top_k]
 
     def save_index(self, index_path="data/faiss_index.bin", metadata_path="data/metadata.pkl"):
         """
-        Save FAISS index and image path metadata to disk.
+        Save FAISS index and metadata to disk.
         """
         if self.index is None:
             raise ValueError("No index to save.")
 
         os.makedirs(os.path.dirname(index_path), exist_ok=True)
-
         faiss.write_index(self.index, index_path)
 
         metadata = {

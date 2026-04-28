@@ -1,6 +1,8 @@
 import os
 import streamlit as st
 from search_engine import ImageSearchEngine
+import tkinter as tk
+from tkinter import filedialog
 
 st.set_page_config(page_title="Local Image Search", layout="wide")
 
@@ -13,28 +15,53 @@ METADATA_PATH = "data/metadata.pkl"
 @st.cache_resource
 def load_engine():
     engine = ImageSearchEngine()
-
-    # Auto-load saved index if present
     if os.path.exists(INDEX_PATH) and os.path.exists(METADATA_PATH):
         try:
             engine.load_index(INDEX_PATH, METADATA_PATH)
         except Exception as e:
             print(f"Could not auto-load index: {e}")
-
     return engine
+
+def select_folder():
+    """
+    Open native folder picker dialog.
+    """
+    root = tk.Tk()
+    root.withdraw()
+    root.attributes("-topmost", True)
+    folder_selected = filedialog.askdirectory()
+    root.destroy()
+    return folder_selected
 
 engine = load_engine()
 
+if "folder_path" not in st.session_state:
+    st.session_state.folder_path = "sample_images"
+
 st.sidebar.header("Index Settings")
-folder_path = st.sidebar.text_input("Image Folder Path", value="sample_images")
+
+new_folder_path = st.sidebar.text_input(
+    "Image Folder Path",
+    value=st.session_state.folder_path
+)
+st.session_state.folder_path = new_folder_path
+folder_path = st.session_state.folder_path
+
+if st.sidebar.button("Browse Folder"):
+    selected = select_folder()
+    if selected:
+        st.session_state.folder_path = selected
+        st.rerun()
+
 build_button = st.sidebar.button("Build / Rebuild Index")
 reload_button = st.sidebar.button("Reload Saved Index")
 
-# Show current status
 if engine.index is not None:
     st.sidebar.success(f"Index loaded with {len(engine.image_paths)} images.")
 else:
     st.sidebar.warning("No index loaded.")
+
+st.sidebar.write(f"Selected Folder: `{folder_path}`")
 
 if build_button:
     if os.path.exists(folder_path):
@@ -55,9 +82,11 @@ if reload_button:
 
 query = st.text_input(
     "Enter your search prompt:",
-    placeholder="e.g. a white dog running on grass"
+    placeholder="e.g. a child smiling while sitting"
 )
+
 top_k = st.slider("Number of results", min_value=1, max_value=10, value=5)
+strictness = st.slider("Match strictness", min_value=0.80, max_value=0.99, value=0.92, step=0.01)
 
 if st.button("Search"):
     if engine.index is None:
@@ -66,12 +95,18 @@ if st.button("Search"):
         st.warning("Please enter a search prompt.")
     else:
         try:
-            results = engine.search(query, top_k=top_k)
+            results = engine.search(
+                query=query,
+                top_k=top_k,
+                fetch_k=20,
+                min_score=0.18,
+                relative_threshold=strictness
+            )
 
             if results:
                 st.subheader("Search Results")
-
                 cols = st.columns(min(5, len(results)))
+
                 for i, result in enumerate(results):
                     image_path = result["image_path"]
                     score = result["score"]
