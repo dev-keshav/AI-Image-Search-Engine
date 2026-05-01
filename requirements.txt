@@ -6,4 +6,7 @@ faiss-cpu
 pillow
 numpy
 tqdm
-opencv-python
+transformers==4.49.0
+accelerate
+einops
+timm
